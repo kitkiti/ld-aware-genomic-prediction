@@ -1,328 +1,197 @@
-# Deep Learning-Based Genomic Prediction with LD-Aware Encoding
+# Deep Learning-Based Genomic Prediction with Multi-Scale Attention Pooling and LD-Aware Encoding
 
-This repository contains a research implementation of a deep learning pipeline for **genomic prediction**, where quantitative phenotypes are predicted from genotype marker data. The project adapts an EBMGP-style workflow using Elastic Net-selected SNPs, linkage disequilibrium-aware tokenization, BERT-style embeddings, convolutional feature extraction, and multiple pooling strategies.
+This repository contains a collaborative implementation and evaluation of an EBMGP-style deep genomic-prediction pipeline. The project combines Elastic Net-selected SNP subsets, linkage-disequilibrium-aware tokenization, BERT-style embeddings, a 1D convolutional backbone, and alternative pooling strategies for quantitative phenotype prediction.
 
-The main implementation is in:
+> This is Tasfia Zaman's public fork of the collaborative project developed with Md. Rezaur Rahman Bhuiyan and Jareen Tasneem Khondaker. The upstream repository is [`killerexcipio/443_proj`](https://github.com/killerexcipio/443_proj).
 
-```text
-pipeline (our work latest).ipynb
-```
+[Read the term project report](Bio_Term_Project_Report_Our_Copy.pdf)
 
-## Project Summary
+## Project scope
 
-Genomic prediction helps estimate phenotypic traits directly from genotype data, which can accelerate breeding and selection decisions in plant and animal genetics. This project explores whether LD-aware deep learning representations can improve prediction performance compared with traditional genomic prediction baselines.
+The project adapts and empirically evaluates an EBMGP-style workflow across **three species and eleven quantitative traits**. It is an implementation and reproduction project; the original EBMGP framework and its methodological references are described in the report.
 
-The implemented pipeline converts SNP genotype data into ordered token sequences, enriches those tokens with local LD structure, embeds them using a BERT-style embedding layer, and trains a convolutional regression model to predict standardized phenotype values.
+The workflow starts from Elastic Net (EN)-selected SNP subsets, constructs LD-aware categorical SNP representations, and combines BERT-style token, position, and segment/type embeddings. A 1D convolutional regression backbone compares alternative pooling operators. Evaluation uses 5-fold cross-validation and matched classical and machine-learning baselines.
 
-## Key Features
+### Collaborative contributions
 
-- End-to-end genomic prediction workflow in Jupyter Notebook
-- Elastic Net-based SNP feature selection
-- LD-aware SNP token construction using adjacent-marker `R²`
-- BERT-style token, position, and segment embeddings
-- 1D convolutional neural network for phenotype regression
-- Pooling strategy comparison:
-  - Multi-Scale Attention Pooling / MAP
-  - Average Pooling
-  - Max Pooling
-  - Local Importance Pooling / LIP
-- LD threshold ablation across multiple threshold values
-- 5-fold cross-validation
-- Benchmarking against classical and machine learning baselines
-- Evaluation using Pearson correlation, RMSE, R², and MAE
+The team:
 
-## Repository Structure
+- Implemented the downstream pipeline from EN-selected SNP subsets through LD-aware tokenization, convolution/pooling, and scalar phenotype regression.
+- Evaluated the pipeline across three species and eleven traits.
+- Reproduced LD-threshold ablation and pooling-strategy comparison at a primary SNP budget of `T = 5000`.
+- Benchmarked against classical/ML baselines using the same folds and selected feature subsets.
 
-```text
-443_proj/
-├── pipeline (our work latest).ipynb   # Main implementation notebook
-└── README.md                          # Project documentation
-```
+### Processed-data dependency
+
+The project uses processed genotype/phenotype files and precomputed Elastic Net SNP rankings associated with the original EBMGP setup. The team did **not** rerun the complete raw-data quality-control, imputation, and EN feature-selection workflow or generate those upstream processed datasets and rankings. The implemented work begins from the selected/processed inputs and covers downstream representation, modeling, ablation, evaluation, and benchmarking.
+
+These external data and ranking files are not bundled in this repository. Reproducing the reported experiments requires the same processed inputs; the report describes their provenance.
+
+## Datasets
+
+| Dataset | Samples | SNPs after upstream QC | Quantitative traits |
+|---|---:|---:|---|
+| Rice | 413 | 36,901 | SW, FLW, PH, AC, SNPP |
+| Sorghum | 451 | 36,468 | MO, YLD, HT |
+| Holstein Bulls | 1,508 | 44,074 | MS, NMSP, VE |
+
+Sample sizes and post-QC SNP counts follow the EBMGP dataset summary reproduced in the report. There are **11 traits across 3 species**. Each sample is an individual, and each prediction task targets one standardized quantitative phenotype.
 
 ## Methods
 
-### 1. Data Loading
+### SNP selection and input preparation
 
-The notebook loads genotype matrices, phenotype labels, and Elastic Net SNP-ranking files for each species and trait.
+The notebook reads precomputed EN ranking files, ranks markers by the supplied `cs` values, selects the Top-T subset, and restores marker order for sequence construction. The primary experimental budget is **`T = 5000`**. This applies existing rankings rather than fitting the complete upstream EN selection pipeline from raw genomic data.
 
-The project evaluates genomic prediction across three species:
+The downstream dataset loader also mean-fills missing phenotype values and standardizes the target before constructing the fold datasets, as implemented in the notebook.
 
-| Species | Traits |
+### LD-aware representation
+
+Genotype states use `H` (major allele), `M` (heterozygous), and `L` (minor allele). Adjacent-marker LD is computed as an R²-style statistic from genotype values. The implementation assigns:
+
+| LD/boundary label | Convention in this notebook |
 |---|---|
-| Rice | SW, FLW, PH, AC, SNPP |
-| Sorghum | MO, YLD, HT |
-| Holstein Bulls | MS, NMSP, VE |
+| `J` | Adjacent-marker R² is at or above the LD threshold |
+| `Y` | Adjacent-marker R² is below the threshold |
+| `N` | Chromosome boundary |
 
-Each sample represents one individual. The input is a sequence of selected SNP markers, and the target is a standardized quantitative phenotype value.
-
-### 2. Elastic Net SNP Selection
-
-To reduce the dimensionality of genotype data, the pipeline uses precomputed Elastic Net rankings to select the most informative SNPs.
-
-The main experiments use:
+Genotype state and LD label combine into categorical SNP tokens:
 
 ```text
-Top-T SNPs = 5000
+HJ  HY  HN  LJ  LY  LN  MJ  MY  MN
 ```
 
-This keeps the model focused on high-value genomic markers while reducing the computational cost of training.
+The LD-label stream also supplies segment/type IDs. This documents the convention used by this implementation.
 
-### 3. LD-Aware Tokenization
+### BERT-style embeddings and convolutional regression
 
-For each selected SNP, the pipeline combines two pieces of information:
+The model uses the BERT embedding structure: token embeddings, positional embeddings, and segment/type embeddings based on the LD-label stream are combined into a dense representation. These embeddings are randomly initialized and trained within the regression pipeline. No pretrained BERT language model or pretrained sentence transformer is used.
 
-1. **Genotype state**
-   - `H`: major allele
-   - `M`: heterozygous allele
-   - `L`: minor allele
+The sequence passes through five 1D convolutional blocks, interleaved with pooling and dropout. Adaptive average pooling reduces the final sequence representation, and a linear head predicts one scalar phenotype.
 
-2. **LD-derived gap label**
-   - `J`: adjacent SNP pair has `R² >= threshold`
-   - `Y`: adjacent SNP pair has `R² < threshold`
-   - `N`: chromosome boundary
-
-These are combined into categorical SNP tokens such as:
-
-```text
-HJ, HY, HN, LJ, LY, LN, MJ, MY, MN
-```
-
-This produces a compact SNP vocabulary that preserves both genotype state and local linkage structure.
-
-### 4. BERT-Style Embedding Layer
-
-The tokenized SNP sequences are passed through a BERT-style embedding module. The embedding representation combines:
-
-- Token embeddings
-- Positional embeddings
-- Segment/type embeddings based on LD labels
-
-This allows the model to learn from both SNP identity and SNP order.
-
-### 5. Convolutional Regression Model
-
-The embedded SNP sequence is processed by a 1D convolutional backbone. The network uses several convolutional blocks with alternating kernel sizes and downsampling.
-
-The final representation is passed into a regression head that predicts one phenotype value per sample.
-
-### 6. Pooling Strategy Comparison
-
-The project compares several pooling strategies inside the convolutional backbone:
-
-| Pooling Method | Description |
+| Architecture setting | Value |
 |---|---|
-| MAP | Attention-style pooling for learning weighted local feature aggregation |
-| AVG | Standard average pooling |
-| MAX | Standard max pooling |
-| LIP | Local importance-based pooling using learned importance weights |
+| SNP budget / maximum positions | 5000 |
+| Token vocabulary | 9 SNP tokens + padding |
+| Type vocabulary | 3 LD labels + padding |
+| Embedding dimension | 64 |
+| Convolutional kernels | 30, 3, 30, 3, 30 |
+| Convolutional stride | 2 in each block |
+| Pool sizes after successive blocks | 1, 2, 3, 2, 3 |
+| Dropout after pooling | 0.3 |
+| Prediction head | `AdaptiveAvgPool1d(1)` followed by `Linear(64, 1)` |
 
-This comparison tests whether learned pooling improves genomic prediction performance over fixed pooling operations.
+### Pooling and LD-threshold ablations
 
-### 7. LD Threshold Ablation
+Four pooling choices provide alternative aggregation/downsampling strategies within the convolutional architecture:
 
-The notebook evaluates how different LD thresholds affect prediction performance.
-
-Tested thresholds include:
-
-```text
-0.2, 0.4, 0.6, 0.8
-```
-
-This experiment measures whether stricter or looser LD labeling improves predictive accuracy.
-
-## Model Architecture
-
-The deep learning model follows this high-level structure:
-
-```text
-Input SNP Tokens
-      ↓
-Token + Position + Segment Embeddings
-      ↓
-1D Convolutional Blocks
-      ↓
-Pooling Layer
-      ↓
-Adaptive Average Pooling
-      ↓
-Linear Regression Head
-      ↓
-Predicted Phenotype
-```
-
-Main architecture settings:
-
-| Component | Value |
+| Choice | Role |
 |---|---|
-| SNP budget | 5000 |
-| Token vocabulary size | 9 SNP tokens + padding |
-| Type vocabulary size | 3 LD labels + padding |
-| Embedding size | 64 |
-| Convolution type | 1D convolution |
-| Dropout | 0.3 |
-| Output | Single continuous phenotype value |
+| MAP | Learned attention-style local feature aggregation |
+| AVG | Average pooling |
+| MAX | Max pooling |
+| LIP | Local importance pooling with learned importance weights |
 
-## Training Setup
+The pooling comparison uses `T = 5000` and LD threshold `0.8`. MAP is not uniformly the best-performing choice; performance varies by trait and species.
 
-The model is trained using:
+The LD-threshold ablation tests **`0.2`, `0.4`, `0.6`, and `0.8`** with MAP pooling at `T = 5000`, measuring sensitivity of predictive performance to the LD discretization threshold.
+
+## Training and validation
 
 | Setting | Value |
 |---|---|
-| Loss function | L1 Loss / MAE |
 | Optimizer | AdamW |
+| Loss | MAE / L1 loss |
 | Learning rate | `5e-4` |
 | Weight decay | `1e-5` |
 | Batch size | 32 |
 | Epochs | Up to 100 |
-| Scheduler | CosineAnnealingLR |
-| Validation | 5-fold cross-validation |
+| Scheduler | `CosineAnnealingLR`, stepped during training |
+| Cross-validation | 5-fold `KFold`, `shuffle=True`, `random_state=27` |
 
-Early stopping is used based on validation Pearson correlation.
+In the main ablation and matched-baseline workflow, indices `0–4` identify the held-out folds and corresponding EN ranking files. The main deep-training wrapper sets the initialization seed to `3407 + fold_index` and uses early stopping based on validation Pearson correlation (patience 15, minimum improvement `1e-4`). Metrics are aggregated across the five held-out folds.
 
-## Baseline Models
+Later notebook cells contain additional exploratory benchmarks and a separate training wrapper for figures. Their settings are retained in the notebook; the table above describes the main reported workflow.
 
-The deep model is compared against classical and machine learning baselines, including:
+## Baselines and evaluation metrics
 
-- RidgeCV as a GBLUP-style linear shrinkage baseline
-- BayesianRidge as a Bayesian regression proxy
-- Histogram-based gradient boosting / LightGBM-style baseline
-- Additional tabular baselines where applicable
+The matched baseline comparison uses the same EN-selected feature subsets and fold splits as the deep model, with numerical `H/M/L → 0/1/2` genotype encoding:
 
-All baselines are evaluated using the same SNP subsets and fold splits for fair comparison.
-
-## Evaluation Metrics
-
-The project reports:
-
-| Metric | Purpose |
+| Implemented estimator | Interpretation |
 |---|---|
-| Pearson Correlation | Measures predictive agreement between observed and predicted phenotypes |
-| RMSE | Measures prediction error magnitude |
-| R² | Measures explained variance |
-| MAE | Used as the training loss |
+| `RidgeCV` | Practical GBLUP-style linear-shrinkage proxy |
+| `BayesianRidge` | Bayesian shrinkage proxy |
+| `HistGradientBoostingRegressor` | Nonlinear histogram-gradient-boosting baseline |
 
-Pearson correlation is treated as the primary evaluation metric because genomic prediction often prioritizes ranking and association between predicted and observed phenotype values.
+Some saved notebook labels use the family names GBLUP, BayesB, and LightGBM. The estimators above are the actual implementations; those labels do not denote exact implementations of those methods.
 
-## Results Summary
+**Pearson correlation** is the primary predictive-association metric. The project also uses **RMSE**, **R²**, and **MAE**, with MAE serving as the training loss.
 
-The experiments show that:
+## Results summary
 
-- Pooling strategy has a meaningful effect on model performance.
-- LIP and MAX pooling are often competitive with MAP.
-- LD threshold choice has a smaller effect than pooling strategy in most experiments.
-- The deep model is especially competitive on several rice traits.
-- Classical genomic prediction baselines remain strong for some species and traits.
-- LD-aware encoding provides a biologically motivated way to structure SNP sequence input for neural networks.
+Across the tested setup, pooling strategy produced larger performance differences than the exact LD threshold, while performance was comparatively stable across the tested LD thresholds.
 
-## Installation
+The EBMGP-style model was particularly competitive on the rice traits. Classical linear/shrinkage baselines remained strong on sorghum and Holstein-bull traits, illustrating that the deep architecture did not uniformly dominate across datasets.
 
-Clone the repository:
+Detailed experimental results, ablations, figures, and numerical tables are available in the [term project report](Bio_Term_Project_Report_Our_Copy.pdf).
 
-```bash
-git clone https://github.com/killerexcipio/443_proj.git
-cd 443_proj
-```
-
-Install the required Python packages:
-
-```bash
-pip install numpy pandas scikit-learn torch torchmetrics transformers einops matplotlib tqdm
-```
-
-Depending on the experiments you run, you may also need:
-
-```bash
-pip install xgboost scipy
-```
-
-## Running the Project
-
-Open the notebook:
-
-```bash
-jupyter notebook "pipeline (our work latest).ipynb"
-```
-
-Then run the cells in order.
-
-Before running experiments, update the local data paths inside the notebook so they point to the correct genotype, phenotype, and Elastic Net ranking files.
-
-Expected local data organization may look like:
+## Repository structure
 
 ```text
-443_proj/
-├── data/
-│   ├── rice/
-│   ├── sorghum/
-│   └── bulls/
-├── EN/
-│   ├── rice/
-│   ├── sorghum/
-│   └── bulls/
-└── pipeline (our work latest).ipynb
+ld-aware-genomic-prediction/
+├── Bio_Term_Project_Report_Our_Copy.pdf
+├── ld_aware_genomic_prediction.ipynb
+└── README.md
 ```
 
-## Example Workflow
+## Installation and running
 
-```python
-# Load genotype, phenotype, and Elastic Net ranking files
-# Select Top-T SNPs
-# Compute LD labels
-# Convert SNPs into genotype + LD tokens
-# Train EBMGP-style model
-# Evaluate with 5-fold cross-validation
-# Compare pooling strategies and baseline models
+Clone this fork:
+
+```bash
+git clone https://github.com/kitkiti/ld-aware-genomic-prediction.git
+cd ld-aware-genomic-prediction
 ```
 
-## Project Outputs
+Install the notebook dependencies in your Python environment:
 
-Depending on which notebook cells are run, the project may generate:
+```bash
+pip install jupyter numpy pandas scikit-learn scipy torch torchmetrics transformers einops matplotlib seaborn tqdm
+```
 
-- Cross-validation results
-- LD threshold ablation tables
-- Pooling comparison tables
-- Benchmark comparison tables
-- Training and validation loss curves
-- Predicted vs. observed scatter plots
-- Feature-importance visualizations for selected SNPs
+The additional exploratory tree-benchmark cells also require `xgboost`:
 
-## Technical Highlights
+```bash
+pip install xgboost
+```
 
-This project demonstrates experience with:
+Prepare the external processed inputs relative to the repository root:
 
-- Deep learning for biological sequence-style data
-- PyTorch model development
-- Custom `Dataset` and `DataLoader` pipelines
-- Genomic feature engineering
-- SNP tokenization
-- Transformer-style embeddings
-- Convolutional neural networks
-- Model ablation studies
-- Cross-validation
-- Regression evaluation
-- Scientific machine learning experimentation
-- Benchmarking against classical ML models
+```text
+data/
+├── rice_pheno.csv
+├── ricerawgeno.csv
+├── sorghum_pheno.csv
+├── sorghumrawgeno.csv
+├── bulls_pheno.csv
+└── bullsrawgeno.csv
+EN/
+├── rice/
+├── sorghum/
+└── bulls/
+```
 
-## Limitations
+The genotype filenames above are those expected by the notebook; they refer to the supplied processed inputs. EN files follow the pattern `EN/{species}/T5000{trait}{fold}.csv`, for example `EN/rice/T5000SW0.csv` for fold 0. These are ranking inputs with `cs` values, not newly fitted feature-selection outputs.
 
-- The repository depends on external/preprocessed genotype and phenotype files.
-- Data files are not bundled directly in the repository.
-- The notebook assumes local file paths that may need to be changed before execution.
-- Elastic Net SNP rankings are treated as precomputed inputs.
-- Full reproducibility requires access to the same processed data and feature-ranking files used during the experiments.
+From the repository root, open:
 
-## Future Work
+```bash
+jupyter notebook ld_aware_genomic_prediction.ipynb
+```
 
-Potential improvements include:
+Check the data paths and trait-column ordering in the configuration against your processed files before running the experiment cells. The auxiliary loader's `/path/to/data/{species}_pheno.csv` fallback is a placeholder for an alternate processed-data directory; configure it only if needed. The main experiments use the relative `data/` and `EN/` paths above. A CUDA-capable GPU can accelerate training; the main configuration falls back to CPU when CUDA is unavailable.
 
-- Refactoring the notebook into reusable Python modules
-- Adding command-line scripts for training and evaluation
-- Recomputing Elastic Net feature selection within each training fold
-- Testing larger SNP budgets
-- Adding richer haplotype-aware encodings
-- Comparing against additional genomic prediction models
-- Adding experiment configuration files
-- Publishing saved result tables and plots
+The notebook retains experiment outputs and includes ablation runs, matched baselines, and figure-generation cells. Full reproduction depends on the external data, precomputed rankings, and compatible package versions; this repository does not include a pinned environment or a complete raw-data preprocessing workflow.
 
 ## Authors
 
@@ -332,8 +201,8 @@ Tasfia Zaman
 
 ## Acknowledgment
 
-This project was developed as part of a computational biology / genomic prediction research assignment. It adapts and evaluates ideas from EBMGP-style deep genomic prediction methods using LD-aware SNP representations and pooling-based neural architectures.
+This project was developed as part of a computational biology / genomic prediction assignment and adapts ideas from the EBMGP genomic-prediction framework. The implementation focuses on reproducing and evaluating selected components of that workflow, including LD-aware SNP representation, convolutional prediction, pooling ablations, and matched baseline comparisons.
 
 ## License
 
-No license is currently specified. Add a license file before public reuse or distribution.
+No license is currently specified for this repository. Please contact the project authors before reusing or redistributing the code.
